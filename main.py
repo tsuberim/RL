@@ -1,31 +1,55 @@
 import gym
-from rl import RandomAgent, PolicyGradientAgent, play, episodes, returns, AtariImageEncoder, IntrinsicCuriosityModule, ConsoleStatsWriter, TensorboardStatsWriter
-from gen import take, last
-from random import uniform
-from mxnet.ndarray import array, one_hot
-from mxnet import autograd
-from mxnet.gluon import Block, Trainer, loss
+from rl import (play, episodes, ObservationEncoder, WithCuriousity, RandomAgent, PolicyGradAgent,
+                GymAdapter, AtariImageEncoder, WithHabits, TensorboardStatsWriter, ConsoleStatsWriter, WithValueEstimator, WithMemeory, PongEncoder, DenseBlock)
+from gen import take, last, do
+from mxnet.gluon import Trainer
+from mxnet.ndarray import array
+from mxnet import autograd, init
+from functools import partial
+
+
+def compose(*fs):
+    def g(x):
+        for f in fs:
+            x = f(x)
+        return x
+    return g
+
+
+def rescale(arr):
+    mn = arr.min()
+    mx = arr.max()
+    return (arr - mn) / (mx - mn)
 
 
 def main():
-    game = gym.make('MontezumaRevenge-v0')
-    with PolicyGradientAgent(game.action_space, save_path='./save/agent', observation_encoder=AtariImageEncoder(16)) as agent,\
-            TensorboardStatsWriter(save_path='./save/logs') as writer:
-        rollout = play(game, agent, render=True)
-        eps = episodes(rollout)
-        for obs, acts, rews, infos in eps:
-            obs, acts, rews = array(obs), array(acts), array(rews)
-            with autograd.record():
-                err, stats = agent.loss(obs, acts, rews)
-            err.backward()
-            agent.trainer.step(1)
-            writer.write(dict(
-                **stats,
-                total_return=returns(rews)[0].asscalar(),
-                total_steps=len(rews)
-            ))
+    tensorboard_writer = TensorboardStatsWriter(save_path='save/logs')
+    console_writer = ConsoleStatsWriter(save_path='save/console')
 
-    game.close()
+    game = gym.make('Acrobot-v1')
+    game._max_episode_steps = 2.5e3
+
+    agent = GymAdapter(PolicyGradAgent(
+        observation_space=game.observation_space,
+        action_space=game.action_space,
+        reward_range=game.reward_range,
+        entropy_weight=5e-3,
+        discount=0.995
+    ))
+    agent.initialize(init.Xavier())
+
+    with agent, tensorboard_writer, console_writer:
+        rollout = play(game, agent, render=True, blur_weight=0.99)
+        eps = episodes(rollout)
+        trainer = Trainer(agent.collect_params(), 'adam',
+                          dict(learning_rate=5e-3))
+        for obs, acts, rews, infos in eps:
+            with autograd.record():
+                loss, stats = agent.loss(obs, acts, rews, infos)
+            loss.backward()
+            trainer.step(len(obs))
+            console_writer.write(stats)
+            tensorboard_writer.write(stats)
 
 
 if __name__ == '__main__':

@@ -11,5 +11,5 @@ def last(it):
 
 def do(f, it):
     for i, val in enumerate(it):
-        f(i, it)
+        f(val)
         yield val
